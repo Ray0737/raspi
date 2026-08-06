@@ -31,22 +31,49 @@ Compatibility note: `mediapipe==0.10.9` is confirmed to have a prebuilt wheel fo
 (pip will fall back to building from source, or fail, on other Python versions —
 stick to 3.11.x unless you've separately confirmed a mediapipe wheel exists for it).
 
-### Setup from a clean Pi
+### Setup from a clean Pi — one command
+
+```bash
+./setup.sh
+```
+
+This checks your Python version (warns if it's not 3.11.x, since that's the
+confirmed-compatible version for `mediapipe==0.10.9` on aarch64), creates
+`venv/` if it doesn't exist yet, installs everything pinned in
+[`requirements.txt`](requirements.txt) into it, and verifies all imports
+(`cv2`, `mediapipe`, `numpy`, `RPi.GPIO`) at the end. Safe to re-run any time
+— it reuses the existing venv instead of recreating it, and reinstalling
+already-satisfied pinned versions is a no-op.
+
+`requirements.txt` pins exact versions confirmed working on this Pi (Debian
+13/trixie, aarch64, Python 3.11.9):
+
+```
+numpy==2.4.6
+opencv-python==5.0.0.93
+mediapipe==0.10.9
+RPi.GPIO==0.7.1
+```
+
+Don't forget the hand landmark model — `test12.py` needs `hand_landmarker.task`
+present in this folder (already included here). Source if you ever need to
+re-download it:
+https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+
+### Setup manually (what `setup.sh` does, step by step)
 
 ```bash
 # 1. Confirm/install Python 3.11.9 via pyenv (skip if already set up)
 pyenv install 3.11.9
 pyenv local 3.11.9      # writes .python-version in this folder
 
-# 2. Upgrade pip
+# 2. Create + activate the venv
+python3 -m venv venv
+source venv/bin/activate
+
+# 3. Install pinned dependencies
 pip install --upgrade pip
-
-# 3. Install dependencies
-pip install numpy opencv-python mediapipe==0.10.9 RPi.GPIO
-
-# 4. Download the hand landmark model (test12.py needs this file present
-#    in the same folder — already included here as hand_landmarker.task)
-#    Source: https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task
+pip install -r requirements.txt
 ```
 
 Verify the install:
@@ -55,11 +82,7 @@ Verify the install:
 python3 -c "import cv2, mediapipe, numpy, RPi.GPIO; print('all good')"
 ```
 
-### Using the project venv (recommended, isolates deps from the global pyenv env)
-
-A venv already exists at `Documents/venv`, built from pyenv's Python 3.11.9,
-with the same packages installed (opencv-python 5.0.0, mediapipe 0.10.9,
-numpy 2.4.6, RPi.GPIO). Activate it before running any script:
+### Using the venv day-to-day
 
 ```bash
 source /home/prayut/Documents/venv/bin/activate
@@ -71,17 +94,6 @@ When you're done:
 
 ```bash
 deactivate
-```
-
-To rebuild it from scratch (e.g. it gets corrupted or deps drift):
-
-```bash
-cd /home/prayut/Documents
-rm -rf venv                              # only if you're sure you want to wipe it
-python3 -m venv venv                     # uses whatever `python3` currently resolves to — make sure pyenv has 3.11.9 active first
-source venv/bin/activate
-pip install --upgrade pip
-pip install numpy opencv-python mediapipe==0.10.9 RPi.GPIO
 ```
 
 Note: there's also an `env/` folder in this directory — that one was built against
@@ -255,3 +267,14 @@ ready-to-paste `COLOR_TARGETS` block using the webcam's real observed RGB
 values (with the same angle assignments as `test12.py`) instead of guessed
 values — meant to replace the hand-picked RGB constants with ones calibrated
 to the actual camera and lighting conditions.
+
+### `requirements.txt`
+Pinned dependency versions confirmed working on this Pi — install with
+`pip install -r requirements.txt` inside an activated venv, or just run
+`./setup.sh` (below) which does that for you.
+
+### `setup.sh`
+One-shot environment setup: checks the active Python is 3.11.x, creates
+`venv/` if missing, installs `requirements.txt` into it, and verifies every
+import (`cv2`, `mediapipe`, `numpy`, `RPi.GPIO`) works before finishing. Safe
+to re-run any time — reuses an existing venv rather than recreating it.
