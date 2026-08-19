@@ -101,6 +101,36 @@ the **system** Python 3.13.5 with `--system-site-packages` (a different, older
 setup, not the pyenv 3.11.9 one this README targets). Don't mix the two;
 use `venv/` for anything in this project.
 
+## I2C LCD setup (PCF8574 16x2 backpack)
+
+`test14.py`/`test15.py` drive a 16x2 character LCD over I2C (PCF8574 backpack,
+default address `0x27`, some boards use `0x3f`). One-time setup on the Pi:
+
+```bash
+sudo raspi-config
+# Interface Options -> I2C -> Enable
+sudo reboot
+```
+
+After reboot, confirm the bus and device are visible:
+
+```bash
+ls /dev/i2c*                 # expect /dev/i2c-1
+sudo i2cdetect -y 1          # expect the LCD's address (e.g. 27) in the grid
+```
+
+If nothing shows up in `i2cdetect`, see the "Common errors" table below.
+
+Then install the LCD library into the venv:
+
+```bash
+source venv/bin/activate
+pip install rpi_lcd
+```
+
+(`rpi_lcd` pulls in `smbus` as a dependency automatically — this is separate
+from `smbus2`, which `RPLCD` uses. Both can coexist in the same venv.)
+
 ## SSH / remote access
 
 Connect from your computer:
@@ -142,6 +172,11 @@ virtual, per above) or strip the `imshow` calls for headless operation.
 | `cv2` underlined red / "Import \"cv2\" could not be resolved" in VS Code, even though `python3 -c "import cv2"` works fine in the terminal | VS Code/Pylance is pointed at a different Python interpreter than the one you installed packages into (e.g. system Python, or a different venv than `Documents/venv`) | In VS Code: Ctrl+Shift+P → "Python: Select Interpreter" → pick the interpreter matching `Documents/venv/bin/python3` (or wherever you actually installed the packages) |
 | `fatal error: Python.h: No such file or directory` during `pip install` | pip couldn't find a prebuilt wheel for your exact Python version/architecture and fell back to compiling the package from source, which needs Python's C headers | Usually means your Python version doesn't match an available wheel — double check you're on Python 3.11.x (matches the confirmed `mediapipe==0.10.9` aarch64 wheel); if you really need to build from source, install headers first: `sudo apt install python3-dev` |
 | `error: externally-managed-environment` when running `pip install <name>` directly on the system Python (not inside a venv/pyenv env) | Debian 12+/trixie's system Python blocks `pip install` outside a venv by default (PEP 668), to stop you from breaking apt-managed packages | **Prefer fixing the root cause, not this flag**: activate `Documents/venv` (or `pyenv local 3.11.9`) first, then `pip install` normally — it won't hit this error inside an isolated env. Only if you deliberately want to install into the system Python anyway, add `--break-system-packages` (e.g. `pip install <name> --break-system-packages`) — this disables the safety check, so double-check you're not about to clobber a package apt/other tools depend on |
+| `sudo i2cdetect -y 1` shows an empty grid, no address at all | I2C interface disabled, wrong bus number, or a wiring/power issue on the LCD backpack | Enable via `sudo raspi-config` -> Interface Options -> I2C -> Enable, then `sudo reboot`; confirm `/dev/i2c-1` exists (`ls /dev/i2c*`) and `lsmod \| grep i2c_` shows `i2c_dev`/`i2c_bcm2835`; if the bus is fine but still nothing shows, check SDA/SCL wiring and that the backpack has power |
+| `ModuleNotFoundError: No module named 'ultralytics'` (or any other pinned package) even though it's installed | Running with the wrong Python — e.g. the bare `pyenv` shim `python3` instead of the project's `venv/bin/python3` (there can be multiple envs in this folder: `venv/`, `env/`, system pyenv) | `source venv/bin/activate` first (prompt shows `(venv)`), then re-run; check with `pip show <package>` inside the activated env if unsure |
+| `NameError: name 'CharLCD' is not defined` | Script still calls `CharLCD(...)` after being edited to import from `rpi_lcd` instead of `RPLCD.i2c` (or vice versa) — the two libraries have different APIs and aren't interchangeable | Make sure the import and the constructor call match the same library: `from RPLCD.i2c import CharLCD` + `CharLCD('PCF8574', addr, cols=.., rows=..)`, **or** `from rpi_lcd import LCD` + `LCD()` with `.text(str, line)` instead of `.write_string()` |
+| `ModuleNotFoundError: No module named 'rpi_lcd'` | Library not installed in the active venv | `source venv/bin/activate && pip install rpi_lcd` |
+| `qt.qpa.xcb: could not connect to display` / `Aborted` right after `cv.imshow()` when running `test13.py`/`test15.py` over SSH | Same root cause as the general Qt/display entry above — SSH session has no `DISPLAY` set | `DISPLAY=:0 python3 test15.py` (needs an active screen-share/VNC session — see SSH/remote access section); if you don't actually need to *see* the detection window, strip the `cv.imshow`/`cv.waitKey` calls and run headless instead |
 
 All the try/except patterns across these scripts follow the same shape:
 
@@ -257,6 +292,28 @@ sky_blue, orange, black, steel_blue, yellow) mapped across a 180° servo sweep,
 angles inverted from the original assignment so the sweep direction matches
 the physical mounting, with steel_blue/sky_blue nudged apart in RGB space to
 reduce misdetection between the two blues.
+
+### `test13.py`
+YOLO webcam object detection using `best.pt` (custom-trained model, `ultralytics`).
+Opens `/dev/video0` at 320x240, runs inference on every 3rd frame
+(`SKIP_FACTOR=2`, `imgsz=320` for speed on Pi CPU), draws bounding boxes +
+labels on the live `cv.imshow` window, and prints each newly-detected class
+name to the console. Needs a display (real, VNC, or `DISPLAY=:0` — see SSH
+section) since it shows a window; no LCD output.
+
+### `test14.py`
+Minimal standalone LCD test — no camera/model involved. Uses `rpi_lcd.LCD()`
+to write "hello world" / "Raspberry Pi" to a 16x2 I2C LCD in a loop (3s on,
+1s cleared), Ctrl+C to stop and clear. Good smoke test to confirm the LCD
+wiring/I2C setup works before running the full detection pipeline.
+
+### `test15.py`
+Merges `test13.py` + `test14.py`: same YOLO webcam detection loop and
+`cv.imshow` bounding-box display as `test13.py`, but also pushes the current
+set of detected class names to the 16x2 LCD via `rpi_lcd` whenever the
+detected set changes (`Detected:` / comma-joined names, or `Scanning...` when
+nothing's found). LCD is cleared on exit. Requires both a display (for the
+webcam window) and a working I2C LCD (see I2C LCD setup section above).
 
 ### `calibrate_colors.py`
 Standalone helper for tuning `COLOR_TARGETS` — no GUI/display required, works
