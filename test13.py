@@ -3,6 +3,11 @@ from ultralytics import YOLO
 
 MODEL_PATH = "best.pt"
 CONF_THRESHOLD = 0.5
+IMG_SIZE = 320       # smaller inference size = faster on Pi CPU
+FRAME_WIDTH = 320
+FRAME_HEIGHT = 240
+SKIP_FACTOR = 2       # only run inference on every (SKIP_FACTOR + 1)th frame
+BOX_COLOR = (0, 255, 0)
 
 
 def main():
@@ -17,13 +22,18 @@ def main():
         if not cap.isOpened():
             raise RuntimeError("Could not open camera device at index 0.")
 
-        cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+        cap.set(cv.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+        cap.set(cv.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+        cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
     except Exception as e:
         print(f"Camera Initialization Error: {e}")
         return
 
     print("Starting video feed. Press 'q' or Ctrl+C to quit.")
+
+    frame_count = 0
+    last_boxes = []      # cached (x1, y1, x2, y2, label) from the last inference frame
+    last_detected = set()
 
     try:
         while cap.isOpened():
@@ -32,21 +42,34 @@ def main():
                 print("Warning: Failed to grab frame from camera.")
                 break
 
-            try:
-                results = model(frame, conf=CONF_THRESHOLD, verbose=False)
-                annotated = results[0].plot()
+            if frame_count % (SKIP_FACTOR + 1) == 0:
+                try:
+                    results = model(frame, conf=CONF_THRESHOLD, imgsz=IMG_SIZE, verbose=False)
+                    boxes = results[0].boxes
 
-                for box in results[0].boxes:
-                    cls_id = int(box.cls[0])
-                    name = model.names[cls_id]
-                    conf = float(box.conf[0])
-                    print(f"Detected {name} ({conf:.2f})")
+                    detected = set()
+                    last_boxes = []
+                    for box in boxes:
+                        cls_id = int(box.cls[0])
+                        name = model.names[cls_id]
+                        conf = float(box.conf[0])
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        last_boxes.append((x1, y1, x2, y2, f"{name} {conf:.2f}"))
+                        detected.add(name)
+                        if name not in last_detected:
+                            print(f"Detected {name} ({conf:.2f})")
+                    last_detected = detected
 
-            except Exception as frame_err:
-                print(f"Error processing frame: {frame_err}")
-                annotated = frame
+                except Exception as frame_err:
+                    print(f"Error processing frame: {frame_err}")
 
-            cv.imshow('YOLO Detection', annotated)
+            for x1, y1, x2, y2, label in last_boxes:
+                cv.rectangle(frame, (x1, y1), (x2, y2), BOX_COLOR, 1)
+                cv.putText(frame, label, (x1, max(y1 - 5, 0)),
+                           cv.FONT_HERSHEY_SIMPLEX, 0.4, BOX_COLOR, 1)
+
+            frame_count += 1
+            cv.imshow('YOLO Detection', frame)
 
             if cv.waitKey(1) & 0xFF == ord('q'):
                 print("Exiting on user request...")
